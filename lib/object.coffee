@@ -7,17 +7,6 @@ class PDFObject
   pad = (str, length) ->
     (Array(length + 1).join('0') + str).slice(-length)
 
-  escapableRe = /[\n\r\t\b\f\(\)\\]/g
-  escapable =
-    '\n': '\\n'
-    '\r': '\\r'
-    '\t': '\\t'
-    '\b': '\\b'
-    '\f': '\\f'
-    '\\': '\\\\'
-    '(': '\\('
-    ')': '\\)'
-
   # Convert little endian UTF-16 to big endian
   swapBytes = (buff) ->
     l = buff.length
@@ -34,13 +23,11 @@ class PDFObject
   @convert: (object) ->
     # String literals are converted to the PDF name type
     if typeof object is 'string'
-      '/' + object
+      '/' + PDFEscape.escapeName(object)
 
     # String objects are converted to PDF strings (UTF-16)
     else if object instanceof String
-      # Escape characters as required by the spec
-      string = object.replace escapableRe, (c) ->
-        return escapable[c]
+      string = PDFEscape.escapeString(object)
 
       # Detect if this is a unicode string
       isUnicode = false
@@ -59,7 +46,8 @@ class PDFObject
     else if Buffer.isBuffer(object)
       '<' + object.toString('hex') + '>'
 
-    else if object instanceof PDFReference
+    else if object instanceof PDFReference ||
+            object instanceof PDFNamedReference
       object.toString()
 
     else if object instanceof Date
@@ -87,4 +75,6 @@ class PDFObject
       '' + object
 
 module.exports = PDFObject
+PDFEscape = require './escape'
 PDFReference = require './reference'
+PDFNamedReference = require './named_reference'

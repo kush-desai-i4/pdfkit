@@ -4,12 +4,13 @@ By Devon Govett
 ###
 
 zlib = require 'zlib'
+PDFNamedReference = require './named_reference'
 
 class PDFReference
-  constructor: (@document, @id, @data = {}) ->
+  constructor: (@document, @id, @data = {}, @options = {}) ->
     @gen = 0
     @deflate = null
-    @compress = @document.compress and not @data.Filter
+    @compress = (@options.compress ? true) and @document.compress and not @data.Filter
     @uncompressedLength = 0
     @chunks = []
 
@@ -65,6 +66,9 @@ class PDFReference
 
   toString: ->
     return "#{@id} #{@gen} R"
+
+  namedReference: (name)->
+    @_namedReference ||= new PDFNamedReference(this, name)
 
 module.exports = PDFReference
 PDFObject = require './object'

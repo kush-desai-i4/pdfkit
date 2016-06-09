@@ -7,6 +7,7 @@ stream = require 'stream'
 fs = require 'fs'
 PDFObject = require './object'
 PDFReference = require './reference'
+PDFEmbeddedFiles = require './embedded_files'
 PDFPage = require './page'
 
 class PDFDocument extends stream.Readable
@@ -28,13 +29,6 @@ class PDFDocument extends stream.Readable
     @_ended = false
     @_offset = 0
 
-    @_root = @ref
-      Type: 'Catalog'
-      Pages: @ref
-        Type: 'Pages'
-        Count: 0
-        Kids: []
-
     # The current page
     @page = null
 
@@ -44,6 +38,7 @@ class PDFDocument extends stream.Readable
     @initFonts()
     @initText()
     @initImages()
+    @initPdfa()
 
     # Initialize the metadata
     @info =
@@ -54,6 +49,8 @@ class PDFDocument extends stream.Readable
     if @options.info
       for key, val of @options.info
         @info[key] = val
+
+    @_root = @catalog()
 
     # Write the header
     # PDF version
@@ -77,6 +74,45 @@ class PDFDocument extends stream.Readable
   mixin require './mixins/text'
   mixin require './mixins/images'
   mixin require './mixins/annotations'
+  mixin require './mixins/pdfa'
+
+  #
+  # e.g.
+  #
+  # /Type /Catalog
+  # /Pages 1 0 R
+  # /Metadata 14 0 R
+  # /OutputIntents [15 0 R]
+  # /AF 19 0 R
+  # /Names << /EmbeddedFiles << /Names [(foo.xml) 17 0 R] >> >>
+  catalog: ->
+    catalog = @ref
+      Type: 'Catalog'
+      Pages: @ref
+        Type: 'Pages'
+        Count: 0
+        Kids: []
+      Names: @nameDictionary()
+
+    # PDF/A metadata and OutputIntents
+    if @options.pdfa
+      catalog.data.Metadata = @pdfaMetadata()
+      catalog.data.OutputIntents = @pdfaOutputIntents()
+
+    # PDF/A-3 Associated Files (/AF)
+    if @options.pdfa && @options.embeddedFiles
+      catalog.data.AF = @embeddedFiles().associatedFiles()
+
+    return catalog
+
+  nameDictionary: ->
+    dictionary = {}
+    if @options.embeddedFiles
+      dictionary.EmbeddedFiles = @embeddedFiles().names()
+    return dictionary
+
+  embeddedFiles: ->
+    @_embeddedFiles ||= new PDFEmbeddedFiles(this, @options.embeddedFiles)
 
   addPage: (options = @options) ->
     # end the current page if needed
@@ -124,8 +160,8 @@ class PDFDocument extends stream.Readable
 
     return
 
-  ref: (data) ->
-    ref = new PDFReference(this, @_offsets.length + 1, data)
+  ref: (data, options = {}) ->
+    ref = new PDFReference(this, @_offsets.length + 1, data, options)
     @_offsets.push null # placeholder for this object's offset once it is finalized
     @_waiting++
     return ref
@@ -181,6 +217,21 @@ class PDFDocument extends stream.Readable
 
     @_info.end()
 
+    # embedded files /EmbeddedFiles (not necessarily PDF/A)
+    @embeddedFiles().end() if @options.embeddedFiles
+
+    # PDF/A associated files /AF (i.e. the PDF/A representation of the embedded files)
+    @_root.data.AF.end() if @_root.data.AF
+
+    # PDF/A metadata
+    @_root.data.Metadata.end() if @_root.data.Metadata
+
+    # PDF/A OutputIntents
+    if @_root.data.OutputIntents
+      for outputIntent in @_root.data.OutputIntents
+        outputIntent.data.DestOutputProfile.end()
+        outputIntent.end()
+
     for name, font of @_fontFamilies
       font.embed()
 
@@ -209,6 +260,7 @@ class PDFDocument extends stream.Readable
       Size: @_offsets.length + 1
       Root: @_root
       Info: @_info
+      ID: @trailerId()
 
     @_write 'startxref'
     @_write "#{xRefOffset}"
@@ -219,5 +271,19 @@ class PDFDocument extends stream.Readable
 
   toString: ->
     "[object PDFDocument]"
+
+  trailerId: ->
+    id = new Buffer(@fileIdentifier())
+    [id, id]
+
+  #
+  # see "10.3 File Identifiers" in PDF1.7 reference
+  # see "6.7.6 File identifiers" in ISO_19005-1_2005 (aka PDF/A-1 spec)
+  #
+  fileIdentifier: ->
+    @_fileIdentifier ||= 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace /[xy]/g, (c) ->
+      r = Math.random() * 16 | 0
+      v = if c == 'x' then r else r&0x3|0x8
+      return v.toString(16)
 
 module.exports = PDFDocument
